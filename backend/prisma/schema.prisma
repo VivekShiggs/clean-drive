@@ -1,0 +1,190 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  FLEET_OWNER
+  DRIVER
+}
+
+enum VehicleStatus {
+  AVAILABLE
+  ON_SHIFT
+  MAINTENANCE
+  RETIRED
+}
+
+enum ShiftStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum EarningsStatus {
+  PENDING
+  APPROVED
+  PAID
+  DISPUTED
+}
+
+model Fleet {
+  id             String     @id @default(uuid())
+  name           String
+  companyReg     String?    @unique @map("company_reg")
+  ownerId        String     @map("owner_id")
+  owner          User       @relation("FleetOwner", fields: [ownerId], references: [id])
+  platformCutBps Int        @default(1500) @map("platform_cut_bps")
+  fleetCutBps    Int        @default(1000) @map("fleet_cut_bps")
+  createdAt      DateTime   @default(now()) @map("created_at")
+  updatedAt      DateTime   @updatedAt @map("updated_at")
+  drivers        User[]     @relation("FleetDrivers")
+  vehicles       Vehicle[]
+  earnings       Earnings[]
+  payslips       Payslip[]
+
+  @@map("fleets")
+}
+
+model User {
+  id               String     @id @default(uuid())
+  email            String     @unique
+  passwordHash     String     @map("password_hash")
+  fullName         String     @map("full_name")
+  phone            String?    @unique
+  role             Role       @default(DRIVER)
+  fleetId          String?    @map("fleet_id")
+  fleet            Fleet?     @relation("FleetDrivers", fields: [fleetId], references: [id])
+  refreshTokenHash String?    @map("refresh_token_hash")
+  licenceNumber    String?    @unique @map("licence_number")
+  licenceExpiry    DateTime?  @map("licence_expiry")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  updatedAt        DateTime   @updatedAt @map("updated_at")
+  ownedFleet       Fleet?     @relation("FleetOwner")
+  shifts           Shift[]
+  earnings         Earnings[]
+  payslips         Payslip[]
+
+  @@index([fleetId])
+  @@index([role])
+  @@map("users")
+}
+
+model Vehicle {
+  id          String        @id @default(uuid())
+  plateNumber String        @unique @map("plate_number")
+  make        String
+  model       String
+  year        Int
+  colour      String?
+  status      VehicleStatus @default(AVAILABLE)
+  currentKm   Float         @default(0) @map("current_km")
+  fleetId     String        @map("fleet_id")
+  fleet       Fleet         @relation(fields: [fleetId], references: [id])
+  createdAt   DateTime      @default(now()) @map("created_at")
+  updatedAt   DateTime      @updatedAt @map("updated_at")
+  shifts      Shift[]
+
+  @@index([fleetId])
+  @@index([status])
+  @@map("vehicles")
+}
+
+model Shift {
+  id            String      @id @default(uuid())
+  driverId      String      @map("driver_id")
+  driver        User        @relation(fields: [driverId], references: [id])
+  vehicleId     String      @map("vehicle_id")
+  vehicle       Vehicle     @relation(fields: [vehicleId], references: [id])
+  status        ShiftStatus @default(ACTIVE)
+  startedAt     DateTime    @map("started_at")
+  endedAt       DateTime?   @map("ended_at")
+  startKm       Float       @map("start_km")
+  endKm         Float?      @map("end_km")
+  totalKm       Float?      @map("total_km")
+  grossEarnings Decimal?    @db.Decimal(10, 2) @map("gross_earnings")
+  lastLat       Float?      @map("last_lat")
+  lastLng       Float?      @map("last_lng")
+  locationAt    DateTime?   @map("location_at")
+  createdAt     DateTime    @default(now()) @map("created_at")
+  updatedAt     DateTime    @updatedAt @map("updated_at")
+  trips         Trip[]
+  earnings      Earnings?
+
+  @@index([driverId])
+  @@index([vehicleId])
+  @@index([status])
+  @@index([startedAt])
+  @@map("shifts")
+}
+
+model Trip {
+  id         String    @id @default(uuid())
+  shiftId    String    @map("shift_id")
+  shift      Shift     @relation(fields: [shiftId], references: [id])
+  pickupLat  Float?    @map("pickup_lat")
+  pickupLng  Float?    @map("pickup_lng")
+  dropoffLat Float?    @map("dropoff_lat")
+  dropoffLng Float?    @map("dropoff_lng")
+  distanceKm Float?    @map("distance_km")
+  fare       Decimal   @db.Decimal(10, 2)
+  startedAt  DateTime  @map("started_at")
+  endedAt    DateTime? @map("ended_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  @@index([shiftId])
+  @@map("trips")
+}
+
+model Earnings {
+  id             String         @id @default(uuid())
+  driverId       String         @map("driver_id")
+  driver         User           @relation(fields: [driverId], references: [id])
+  fleetId        String         @map("fleet_id")
+  fleet          Fleet          @relation(fields: [fleetId], references: [id])
+  shiftId        String         @unique @map("shift_id")
+  shift          Shift          @relation(fields: [shiftId], references: [id])
+  platformCutBps Int            @map("platform_cut_bps")
+  fleetCutBps    Int            @map("fleet_cut_bps")
+  grossAmount    Decimal        @db.Decimal(10, 2) @map("gross_amount")
+  platformCut    Decimal        @db.Decimal(10, 2) @map("platform_cut")
+  fleetCut       Decimal        @db.Decimal(10, 2) @map("fleet_cut")
+  driverNet      Decimal        @db.Decimal(10, 2) @map("driver_net")
+  periodDate     DateTime       @map("period_date")
+  status         EarningsStatus @default(PENDING)
+  payslipId      String?        @map("payslip_id")
+  payslip        Payslip?       @relation(fields: [payslipId], references: [id])
+  createdAt      DateTime       @default(now()) @map("created_at")
+  updatedAt      DateTime       @updatedAt @map("updated_at")
+
+  @@index([driverId])
+  @@index([fleetId])
+  @@index([periodDate])
+  @@index([status])
+  @@map("earnings")
+}
+
+model Payslip {
+  id              String     @id @default(uuid())
+  driverId        String     @map("driver_id")
+  driver          User       @relation(fields: [driverId], references: [id])
+  fleetId         String     @map("fleet_id")
+  fleet           Fleet      @relation(fields: [fleetId], references: [id])
+  periodFrom      DateTime   @map("period_from")
+  periodTo        DateTime   @map("period_to")
+  totalGross      Decimal    @db.Decimal(10, 2) @map("total_gross")
+  totalDeductions Decimal    @db.Decimal(10, 2) @map("total_deductions")
+  totalNet        Decimal    @db.Decimal(10, 2) @map("total_net")
+  pdfUrl          String?    @map("pdf_url")
+  generatedAt     DateTime   @default(now()) @map("generated_at")
+  earnings        Earnings[]
+
+  @@index([driverId])
+  @@index([fleetId])
+  @@map("payslips")
+}
