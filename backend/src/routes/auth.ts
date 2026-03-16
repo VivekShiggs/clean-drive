@@ -3,9 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
 import prisma from '../lib/prisma';
 import { authenticate, AuthRequest } from '../middleware/auth';
-
 const router = Router();
-
 // POST /api/auth/register
 router.post('/register', async (req: Request, res: Response): Promise<void> => {
   const { email, password, fullName, phone, role, fleetId } = req.body;
@@ -24,17 +22,16 @@ router.post('/register', async (req: Request, res: Response): Promise<void> => {
       data: { email, passwordHash, fullName, phone, role: role || 'DRIVER', fleetId },
       select: { id: true, email: true, fullName: true, role: true, fleetId: true },
     });
-    const token = jwt.sign(
+    const token = (jwt.sign as any)(
       { id: user.id, role: user.role, fleetId: user.fleetId },
       process.env.JWT_SECRET!,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      { expiresIn: '7d' }
     );
     res.status(201).json({ token, user });
   } catch (err) {
     res.status(500).json({ error: 'Registration failed' });
   }
 });
-
 // POST /api/auth/login
 router.post('/login', async (req: Request, res: Response): Promise<void> => {
   const { email, password } = req.body;
@@ -53,10 +50,10 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
       res.status(401).json({ error: 'Invalid credentials' });
       return;
     }
-    const token = jwt.sign(
+    const token = (jwt.sign as any)(
       { id: user.id, role: user.role, fleetId: user.fleetId },
       process.env.JWT_SECRET!,
-      { expiresIn: process.env.JWT_EXPIRES_IN || '7d' }
+      { expiresIn: '7d' }
     );
     res.json({
       token,
