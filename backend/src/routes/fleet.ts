@@ -26,17 +26,17 @@ router.get('/stats', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
+// ─── DRIVERS ─────────────────────────────────────────────────────────────────
+
 // GET /api/fleet/drivers
 router.get('/drivers', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const drivers = await prisma.user.findMany({
       where: { fleetId: req.user!.fleetId!, role: 'DRIVER' },
       select: {
-        id: true, fullName: true, email: true, phone: true, licenceNumber: true,
-        shifts: {
-          where: { status: 'COMPLETED' },
-          select: { grossEarnings: true },
-        },
+        id: true, fullName: true, email: true, phone: true,
+        licenceNumber: true, licenceExpiry: true,
+        shifts: { where: { status: 'COMPLETED' }, select: { grossEarnings: true } },
       },
       orderBy: { fullName: 'asc' },
     });
@@ -52,6 +52,81 @@ router.get('/drivers', async (req: AuthRequest, res: Response): Promise<void> =>
   }
 });
 
+// POST /api/fleet/drivers — add single driver
+router.post('/drivers', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { fullName, email, password, phone, licenceNumber, licenceExpiry } = req.body;
+  if (!fullName || !email || !password) {
+    res.status(400).json({ error: 'fullName, email and password are required' });
+    return;
+  }
+  try {
+    const existing = await prisma.user.findUnique({ where: { email } });
+    if (existing) { res.status(409).json({ error: 'Email already registered' }); return; }
+    const passwordHash = await bcrypt.hash(password, 12);
+    const driver = await prisma.user.create({
+      data: {
+        fullName, email, passwordHash,
+        phone: phone ? String(phone) : null,
+        licenceNumber: licenceNumber || null,
+        licenceExpiry: licenceExpiry ? new Date(licenceExpiry) : null,
+        role: 'DRIVER',
+        fleetId: req.user!.fleetId!,
+      },
+      select: { id: true, fullName: true, email: true, phone: true, licenceNumber: true },
+    });
+    res.status(201).json(driver);
+  } catch {
+    res.status(500).json({ error: 'Failed to add driver' });
+  }
+});
+
+// PATCH /api/fleet/drivers/:id — edit driver
+router.patch('/drivers/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { fullName, email, phone, licenceNumber, licenceExpiry, password } = req.body;
+  try {
+    const driver = await prisma.user.findUnique({ where: { id } });
+    if (!driver || driver.fleetId !== req.user!.fleetId!) {
+      res.status(404).json({ error: 'Driver not found' }); return;
+    }
+    const data: any = {};
+    if (fullName) data.fullName = fullName;
+    if (email) data.email = email;
+    if (phone !== undefined) data.phone = phone ? String(phone) : null;
+    if (licenceNumber !== undefined) data.licenceNumber = licenceNumber || null;
+    if (licenceExpiry !== undefined) data.licenceExpiry = licenceExpiry ? new Date(licenceExpiry) : null;
+    if (password) data.passwordHash = await bcrypt.hash(password, 12);
+    const updated = await prisma.user.update({
+      where: { id }, data,
+      select: { id: true, fullName: true, email: true, phone: true, licenceNumber: true },
+    });
+    res.json(updated);
+  } catch {
+    res.status(500).json({ error: 'Failed to update driver' });
+  }
+});
+
+// DELETE /api/fleet/drivers/:id
+router.delete('/drivers/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const driver = await prisma.user.findUnique({ where: { id } });
+    if (!driver || driver.fleetId !== req.user!.fleetId!) {
+      res.status(404).json({ error: 'Driver not found' }); return;
+    }
+    const activeShift = await prisma.shift.findFirst({ where: { driverId: id, status: 'ACTIVE' } });
+    if (activeShift) {
+      res.status(409).json({ error: 'Cannot delete driver with an active shift' }); return;
+    }
+    await prisma.user.delete({ where: { id } });
+    res.json({ message: 'Driver removed successfully' });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete driver' });
+  }
+});
+
+// ─── VEHICLES ────────────────────────────────────────────────────────────────
+
 // GET /api/fleet/vehicles
 router.get('/vehicles', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
@@ -65,17 +140,82 @@ router.get('/vehicles', async (req: AuthRequest, res: Response): Promise<void> =
   }
 });
 
-// POST /api/fleet/upload — bulk import via .xlsx
+// POST /api/fleet/vehicles — add vehicle
+router.post('/vehicles', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { plateNumber, make, model, year, colour, currentKm } = req.body;
+  if (!plateNumber || !make || !model || !year) {
+    res.status(400).json({ error: 'plateNumber, make, model and year are required' });
+    return;
+  }
+  try {
+    const existing = await prisma.vehicle.findUnique({ where: { plateNumber } });
+    if (existing) { res.status(409).json({ error: 'Plate number already exists' }); return; }
+    const vehicle = await prisma.vehicle.create({
+      data: {
+        plateNumber, make, model,
+        year: Number(year),
+        colour: colour || null,
+        currentKm: currentKm ? Number(currentKm) : 0,
+        fleetId: req.user!.fleetId!,
+      },
+    });
+    res.status(201).json(vehicle);
+  } catch {
+    res.status(500).json({ error: 'Failed to add vehicle' });
+  }
+});
+
+// PATCH /api/fleet/vehicles/:id — edit vehicle
+router.patch('/vehicles/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  const { plateNumber, make, model, year, colour, currentKm, status } = req.body;
+  try {
+    const vehicle = await prisma.vehicle.findUnique({ where: { id } });
+    if (!vehicle || vehicle.fleetId !== req.user!.fleetId!) {
+      res.status(404).json({ error: 'Vehicle not found' }); return;
+    }
+    const data: any = {};
+    if (plateNumber) data.plateNumber = plateNumber;
+    if (make) data.make = make;
+    if (model) data.model = model;
+    if (year) data.year = Number(year);
+    if (colour !== undefined) data.colour = colour || null;
+    if (currentKm !== undefined) data.currentKm = Number(currentKm);
+    if (status) data.status = status;
+    const updated = await prisma.vehicle.update({ where: { id }, data });
+    res.json(updated);
+  } catch {
+    res.status(500).json({ error: 'Failed to update vehicle' });
+  }
+});
+
+// DELETE /api/fleet/vehicles/:id
+router.delete('/vehicles/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const { id } = req.params;
+  try {
+    const vehicle = await prisma.vehicle.findUnique({ where: { id } });
+    if (!vehicle || vehicle.fleetId !== req.user!.fleetId!) {
+      res.status(404).json({ error: 'Vehicle not found' }); return;
+    }
+    if (vehicle.status === 'ON_SHIFT') {
+      res.status(409).json({ error: 'Cannot delete vehicle currently on a shift' }); return;
+    }
+    await prisma.vehicle.delete({ where: { id } });
+    res.json({ message: 'Vehicle removed successfully' });
+  } catch {
+    res.status(500).json({ error: 'Failed to delete vehicle' });
+  }
+});
+
+// ─── BULK UPLOAD ─────────────────────────────────────────────────────────────
+
 router.post('/upload', upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
   if (!req.file) { res.status(400).json({ error: 'No file uploaded' }); return; }
   try {
     const workbook = XLSX.read(req.file.buffer, { type: 'buffer' });
-    const results: { drivers: number; vehicles: number; errors: string[] } = {
-      drivers: 0, vehicles: 0, errors: [],
-    };
+    const results: { drivers: number; vehicles: number; errors: string[] } = { drivers: 0, vehicles: 0, errors: [] };
     const fleetId = req.user!.fleetId!;
 
-    // Expect a sheet named "Drivers"
     if (workbook.SheetNames.includes('Drivers')) {
       const sheet = XLSX.utils.sheet_to_json<any>(workbook.Sheets['Drivers']);
       for (const row of sheet) {
@@ -87,7 +227,7 @@ router.post('/upload', upload.single('file'), async (req: AuthRequest, res: Resp
             create: {
               email: row.email, passwordHash: hash,
               fullName: row.fullName || row.full_name,
-              phone: row.phone || null,
+              phone: row.phone ? String(row.phone) : null,
               licenceNumber: row.licenceNumber || row.licence_number || null,
               role: 'DRIVER', fleetId,
             },
@@ -99,11 +239,11 @@ router.post('/upload', upload.single('file'), async (req: AuthRequest, res: Resp
       }
     }
 
-    // Expect a sheet named "Vehicles"
     if (workbook.SheetNames.includes('Vehicles')) {
       const sheet = XLSX.utils.sheet_to_json<any>(workbook.Sheets['Vehicles']);
       for (const row of sheet) {
         try {
+          if (!fleetId) { results.errors.push(`Vehicle: No fleet associated`); continue; }
           await prisma.vehicle.upsert({
             where: { plateNumber: row.plateNumber || row.plate_number },
             update: {},
@@ -115,7 +255,7 @@ router.post('/upload', upload.single('file'), async (req: AuthRequest, res: Resp
           });
           results.vehicles++;
         } catch (e: any) {
-          results.errors.push(`Vehicle ${row.plateNumber}: ${e.message}`);
+          results.errors.push(`Vehicle ${row.plateNumber || row.plate_number}: ${e.message}`);
         }
       }
     }
@@ -125,7 +265,8 @@ router.post('/upload', upload.single('file'), async (req: AuthRequest, res: Resp
   }
 });
 
-// GET /api/fleet/earnings
+// ─── EARNINGS & PAYSLIPS ─────────────────────────────────────────────────────
+
 router.get('/earnings', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const earnings = await prisma.earnings.findMany({
@@ -142,7 +283,6 @@ router.get('/earnings', async (req: AuthRequest, res: Response): Promise<void> =
   }
 });
 
-// POST /api/fleet/payslip/:driverId
 router.post('/payslip/:driverId', async (req: AuthRequest, res: Response): Promise<void> => {
   const { driverId } = req.params;
   const { periodFrom, periodTo } = req.body;
@@ -155,14 +295,10 @@ router.post('/payslip/:driverId', async (req: AuthRequest, res: Response): Promi
         payslipId: null,
       },
     });
-    if (!earnings.length) {
-      res.status(404).json({ error: 'No approved earnings found for this period' });
-      return;
-    }
+    if (!earnings.length) { res.status(404).json({ error: 'No approved earnings found for this period' }); return; }
     const totalGross = earnings.reduce((s, e) => s + Number(e.grossAmount), 0);
     const totalDeductions = earnings.reduce((s, e) => s + Number(e.platformCut) + Number(e.fleetCut), 0);
     const totalNet = earnings.reduce((s, e) => s + Number(e.driverNet), 0);
-
     const payslip = await prisma.payslip.create({
       data: {
         driverId, fleetId: req.user!.fleetId!,
