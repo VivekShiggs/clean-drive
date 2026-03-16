@@ -37,7 +37,7 @@ model Fleet {
   id             String     @id @default(uuid())
   name           String
   companyReg     String?    @unique @map("company_reg")
-  ownerId        String     @map("owner_id")
+  ownerId        String     @unique @map("owner_id")
   owner          User       @relation("FleetOwner", fields: [ownerId], references: [id])
   platformCutBps Int        @default(1500) @map("platform_cut_bps")
   fleetCutBps    Int        @default(1000) @map("fleet_cut_bps")
